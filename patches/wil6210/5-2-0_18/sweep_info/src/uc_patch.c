@@ -48,13 +48,15 @@ typedef struct {
 	int16_t snr;
 	uint16_t ctr;
 	uint16_t flags;
+	uint8_t dmg_tmstmp[8]; // dmg timestamp (8 byte)
 } sector_info_t;
 
 typedef struct {
-    uint32_t cur_pos;
-    uint32_t ctr_pkts;
-    uint32_t ctr_swps;
-    sector_info_t dump[SWEEP_DUMP_SIZE]; 
+	uint32_t cur_pos;
+	uint32_t ctr_pkts;
+	uint32_t ctr_swps;
+	uint8_t dmg_tmstmp[8]; // dmg timestamp (8 byte)
+	sector_info_t dump[SWEEP_DUMP_SIZE]; 
 } sweep_dump_t;
 
 int16_t snr_buffer = 0;
@@ -73,8 +75,8 @@ uint32* const cur_pos = &(sweep_dump.cur_pos);
  */
 void
 uc_hook() {
-    printf("UC: INITIALIZED\n");
-    sub_8bc();
+	printf("UC: INITIALIZED\n");
+	sub_8bc();
 }
 __attribute__((at(UC_ADDR(0x82c), "", CHIP_VER_WIL6210, FW_VER_520_18)))
 BLPatch(uc_hook, uc_hook);
@@ -85,9 +87,9 @@ BLPatch(uc_hook, uc_hook);
  */
 void
 rx_sweep_frame() {
-        sector_info_t* cur_dump;
+	sector_info_t* cur_dump;
 	uint16* frame_control_field = (uint16*) PTR_CUR_FRAME_BUFFER;
-        uint8* frame_src_addr = (uint8*) (PTR_CUR_FRAME_BUFFER + 0x0A);
+	uint8* frame_src_addr = (uint8*) (PTR_CUR_FRAME_BUFFER + 0x0A);
 	uint8* frame_ssw_field = (uint8*) PTR_CUR_FRAME_BUFFER + 0x10;
 	uint8 cur_cdown;
 
@@ -105,7 +107,7 @@ rx_sweep_frame() {
 			lst_cdown = cur_cdown;
 
 			// Use SNR value
-            		cur_dump->snr = snr_buffer;
+			cur_dump->snr = snr_buffer;
 
 			// Copy the SRC MAC addr
 			cur_dump->src[0] = frame_src_addr[0];
@@ -121,27 +123,53 @@ rx_sweep_frame() {
 
 			cur_dump->flags = 0;
 			cur_dump->ctr = sweep_dump.ctr_swps;
+
+			// update dmg_tmstmp field (8 byte)
+			cur_dump->dmg_tmstmp[0] = sweep_dump.dmg_tmstmp[0];
+			cur_dump->dmg_tmstmp[1] = sweep_dump.dmg_tmstmp[1];
+			cur_dump->dmg_tmstmp[2] = sweep_dump.dmg_tmstmp[2];
+			cur_dump->dmg_tmstmp[3] = sweep_dump.dmg_tmstmp[3];
+			cur_dump->dmg_tmstmp[4] = sweep_dump.dmg_tmstmp[4];
+			cur_dump->dmg_tmstmp[5] = sweep_dump.dmg_tmstmp[5];
+			cur_dump->dmg_tmstmp[6] = sweep_dump.dmg_tmstmp[6];
+			cur_dump->dmg_tmstmp[7] = sweep_dump.dmg_tmstmp[7];
 			
 			// Increase the counter
-			sweep_dump.ctr_pkts ++;
+			sweep_dump.ctr_pkts++;
 			(*cur_pos) = ((*cur_pos) + 1) % SWEEP_DUMP_SIZE;	
 		}
 	}
 	else if (*frame_control_field == 0x0a64 || *frame_control_field == 0x0964) {
 		// Received Acknowledgement or Feedback
-		printf("SWP Feedback (type %04x) from %02x:%02x:%02x:%02x:%02x:%02x sec: %d, snr: %02d dB\n",
-        	*frame_control_field, frame_src_addr[0], frame_src_addr[1],
-            frame_src_addr[2], frame_src_addr[3], frame_src_addr[4],
-            frame_src_addr[5], frame_ssw_field[0] & 0x3F, 
-			frame_ssw_field[1]/4+19);
+		printf("SWP Feedback (type %04x) from %02x:%02x:%02x:%02x:%02x:%02x sec: %d, snr: %02d dB, dmg: %02x%02x%02x%02x%02x%02x%02x%02x\n",
+			*frame_control_field, frame_src_addr[0], frame_src_addr[1],
+			frame_src_addr[2], frame_src_addr[3], frame_src_addr[4],
+			frame_src_addr[5], frame_ssw_field[0] & 0x3F, 
+			frame_ssw_field[1]/4+19,
+			sweep_dump.dmg_tmstmp[0], sweep_dump.dmg_tmstmp[1], sweep_dump.dmg_tmstmp[2], sweep_dump.dmg_tmstmp[3],
+			sweep_dump.dmg_tmstmp[4], sweep_dump.dmg_tmstmp[5], sweep_dump.dmg_tmstmp[6], sweep_dump.dmg_tmstmp[7]);
 	}
-	else if (*frame_control_field == 0x0464 || *frame_control_field == 0x0764) {
-        // Received Grant
-        printf("SWP Grant (type %04x) from %02x:%02x:%02x:%02x:%02x:%02x\n",
-            *frame_control_field, frame_src_addr[0], frame_src_addr[1],
-            frame_src_addr[2], frame_src_addr[3], frame_src_addr[4],
-            frame_src_addr[5]);
-    }
+	// else if (*frame_control_field == 0x0464 || *frame_control_field == 0x0764) {
+	// 	// Received Grant
+	// 	printf("SWP Grant (type %04x) from %02x:%02x:%02x:%02x:%02x:%02x\n",
+	// 		*frame_control_field, frame_src_addr[0], frame_src_addr[1],
+	// 		frame_src_addr[2], frame_src_addr[3], frame_src_addr[4],
+	// 		frame_src_addr[5]);
+	// }
+	else if (*frame_control_field == 0x000c) {
+		// received DMG beacon : update prev dmg timestamp field
+		uint8* frame_content = (uint8*) (PTR_CUR_FRAME_BUFFER);
+		// update sweep dump dmg_tmstmp field (8 byte)
+		sweep_dump.dmg_tmstmp[0] = frame_content[17];
+		sweep_dump.dmg_tmstmp[1] = frame_content[16];
+		sweep_dump.dmg_tmstmp[2] = frame_content[15];
+		sweep_dump.dmg_tmstmp[3] = frame_content[14];
+		sweep_dump.dmg_tmstmp[4] = frame_content[13];
+		sweep_dump.dmg_tmstmp[5] = frame_content[12];
+		sweep_dump.dmg_tmstmp[6] = frame_content[11];
+		sweep_dump.dmg_tmstmp[7] = frame_content[10];
+	}
+
 	snr_buffer_val = 0;
 }
 __attribute__((at(UC_ADDR(0xF486), "", CHIP_VER_WIL6210, FW_VER_520_18)))
